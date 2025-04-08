@@ -1,0 +1,6 @@
+services:
+  pipeline:
+    build: .
+    volumes:
+      - .:/app
+    command: python main.py
