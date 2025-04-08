@@ -1,101 +1,119 @@
-# Project Overview
+# 📦 ETL Pipeline Documentation
 
-This project focuses on processing and transforming data to construct a star schema database, facilitating efficient data analysis and reporting. The primary objectives include:
+This document explains how to run the ETL pipeline using Docker Compose and outlines the extraction and transformation logic implemented in the pipeline.
 
-    Data Extraction and Transformation: Processing raw data from various sources to create structured fact and dimension tables.​
+---
 
-    Data Integration: Combining information from multiple DataFrames (sku_df, logs_df, market_price_df, and clean_df) to ensure consistency and accuracy.​
+## 🚀 How to Run the ETL Pipeline
 
-    Automation and Reproducibility: Utilizing Docker to containerize the data processing pipeline, ensuring consistent execution across different environments.​
-    DEV Community
+### 🛠 Requirements
+- Docker
+- Docker Compose
 
-The implementation adheres to PEP 8 guidelines and incorporates logging for enhanced traceability and debugging.​
-Thought Process
-
-The development of this project was guided by the following considerations:
-
-    Data Structuring: Designing fact and dimension tables based on the star schema to optimize query performance and simplify data analysis.​
-
-    Modularity: Creating functions that handle specific tasks (e.g., data extraction, transformation, and loading) to enhance code readability and maintainability.​
-
-    Scalability: Ensuring that the data processing pipeline can handle large datasets efficiently.​
-
-    Portability: Containerizing the application with Docker to guarantee consistent behavior across various environments and simplify deployment.​
-    Docker Documentation
-
-Prerequisites
-
-Before running the project, ensure that you have the following installed on your system:
-
-    Docker: The application is containerized using Docker. Install Docker by following the instructions for your operating system on the official Docker website.​
-
-Project Structure
-
-The project directory is organized as follows:
-
+### 📁 Project Structure
+```bash
 project-root/
 ├── data/
-│   ├── sku_data.csv
-│   ├── logs_data.csv
-│   └── market_price_data.csv
-├── main.py
+│   ├── logs/                # Log files: log_*.txt
+│   ├── skus/                # SKU metadata: skus.json
+│   └── market_prices/       # Parquet files: market_prices_*.parquet
+├── outputs/                 # Output folder for generated CSVs and logs
+├── main.py                  # Main ETL script
+├── requirements.txt         # Python dependencies
 ├── Dockerfile
-├── docker-compose.yml
-├── .gitignore
-├── requirements.txt
-├── Data Engineer Take Home Task.pdf
-└── README.md
+└── docker-compose.yml
+```
 
-    data/: Contains the input data files.​
-
-    scripts/: Contains the Python script (process_data.py) responsible for processing the data and generating the star schema tables.​
-    DEV Community+1Medium+1
-
-    Dockerfile: Defines the Docker image configuration.​
-
-    README.md: Provides an overview of the project and instructions for setup and usage.​
-
-Running the Project with Docker
-
-To execute the data processing pipeline within a Docker container, follow these steps:
-
-    Clone the Repository:
-
-    git clone https://github.com/your-username/your-repository.git
-
-    Navigate to the Project Directory:
-
-    cd ferovinum
+### 🐳 Docker Setup
 
 
-    Run the Docker Container:
+### ▶️ Run the Pipeline
+```bash
+git clone https://github.com/Manny-97/ferovinum
+docker-compose up
+```
 
-    docker-compose up
+---
 
-    To Shutdown the Container:
+## 🔍 ETL Logic Overview
 
-    docker-compose down
+### 1. 📥 Extraction Logic
 
-This command starts the container, and the data processing script will execute, reading input files from the data directory and writing the resulting CSV files to the outputs directory.
-Accessing the Output
+#### a. Logs (`parse_logs`)
+- Loads and merges all `log_*.txt` files in the `data/logs/` directory.
+- Each log line is parsed using regex to extract:
+  - Timestamp
+  - Message type (`ORDER`, `TRANSACTION`, `RESULT`, `RESPONSE`)
+  - Trace ID
+  - Message details
+- Incomplete entries are safely skipped and logged.
 
-After the container has finished running, the processed data will be available in the outputs directory. This directory will contain the following CSV files:​
+#### b. SKUs (`read_skus`)
+- Reads nested JSON from `skus.json`.
+- Uses `pd.json_normalize()` to flatten nested fields.
+- Columns like grape variety, blend, ABV, etc. are renamed for clarity.
 
-    market_data.csv
+#### c. Market Prices (`read_market_prices`)
+- Reads multiple `market_prices_*.parquet` files.
+- Cleans the `quote_id` to extract SKU.
+- Converts `timestamp` to datetime for accurate merging.
 
-    final_clean_dataset.csv: 
+### 2. ♻️ Transformation Logic
 
-    most_profitable_brands.csv: 
+This is where the real work happens. We're turning raw log entries and metadata into a unified dataset.
 
-    top_region_per_sku.csv: 
+#### a. Match Orders to Transactions
+- From `ORDER` log entries, we extract the SKU, quantity, and whether it's a `buy` or `sell`.
+- If it's a `buy`, the quantity is negated. This way, `+` means `sell` and `-` means `buy`.
+- We then look for a corresponding `TRANSACTION` log with the same `trace_id` and join them.
 
-    two_most_profitable_brands.csv: 
+#### b. Add SKU Metadata
+- The merged transaction dataset is then joined with the SKU metadata using the `sku` column.
+- Now we know the type of product involved in each transaction: its alcohol content, bottle size, varietal, brand, etc.
 
-These tables can be imported into a database or used directly for analysis and reporting.​
-Notes
+#### c. Add Market Price
+- We want to know the price of a product **at the time it was transacted**.
+- For each transaction, we perform a **merge-as-of**: this finds the latest available price *before* the transaction timestamp.
+- This gives a more realistic value of the transaction, reflecting market conditions.
 
-    Data Files: Ensure that the input data files (skus.json, logs.txt, and market_price_date.parquet) are placed in the data directory before running the container.​
+#### d. Compute Transaction Value and Temporal Features
+- We compute the dollar value of each transaction: `quantity * market_price`.
+- Then, we extract time-based features: year, quarter, and week for temporal analysis.
+- Unnecessary fields like raw `details` and `transaction_amount` are dropped.
 
-    Docker Compatibility: The provided commands are compatible with Unix-based systems. For Windows, adjust the volume mounting syntax accordingly.​
+At the end of this transformation, we have a fully joined, timestamped, and value-enriched transaction dataset.
 
-    Logging: The data processing script includes logging to provide insights into the execution flow and assist with debugging if necessary.
+### 3. 💾 Load
+- Saves enriched dataset to `outputs/final_clean_dataset.csv`
+- Generates and saves:
+  - `top_region_per_sku.csv`: Most active region per SKU per quarter
+  - `two_most_profitable_brands.csv`: Top 2 brands by sales value in early 2024
+  - `market_data.csv`: Cleaned market data
+
+---
+
+## 🧪 Test Case Generation
+
+The pipeline also includes a utility to generate inventory snapshots:
+- Filters transactions before `2025-02-01`
+- Aggregates inventory balances per SKU
+- Filters to a set of selected SKUs
+
+CSV is printed and available for inspection after the run.
+
+---
+
+## 📊 Summary of Outputs
+
+| File                               | Description                                |
+|------------------------------------|--------------------------------------------|
+| `final_clean_dataset.csv`          | Enriched transactional dataset             |
+| `top_region_per_sku.csv`           | Top performing region per SKU              |
+| `two_most_profitable_brands.csv`   | Top 2 most profitable brands in early 2024 |
+| `market_data.csv`                  | Cleaned and merged market price data       |
+| `log_*.log`                        | Timestamped logs of pipeline execution     |
+
+---
+
+Nice working on this! 🎯
+
