@@ -24,7 +24,6 @@ project-root/
 └── docker-compose.yml
 ```
 
-### 🐳 Docker Setup
 
 
 ### ▶️ Run the Pipeline
